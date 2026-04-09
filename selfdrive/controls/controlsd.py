@@ -11,6 +11,7 @@ from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
+from opendbc.car.toyota.values import CAR as TOYOTA_CAR
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
@@ -59,6 +60,10 @@ class Controls:
     elif self.CP.lateralTuning.which() == 'torque':
       self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
 
+    if self.CP.carFingerprint == TOYOTA_CAR.TOYOTA_PRIUS:
+      self.virtual_zss_angle_smoothed = 0.0
+      self.virtual_zss_initialized = False
+
     # dp - ALKA: cache enabled state (CP doesn't change after init)
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
     self.alka_active = False
@@ -82,6 +87,28 @@ class Controls:
 
     steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
     self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
+
+    if self.CP.carFingerprint == TOYOTA_CAR.TOYOTA_PRIUS and self.calibrated_pose is not None:
+      CS = CS.as_builder()
+
+      if CS.vEgo < 0.1 or not self.virtual_zss_initialized:
+        self.virtual_zss_angle_smoothed = CS.steeringAngleDeg
+        self.virtual_zss_initialized = True
+      else:
+        yaw_rate = self.calibrated_pose.angular_velocity.yaw
+        physics_angle_rad = self.VM.get_steer_from_yaw_rate(yaw_rate, CS.vEgo, lp.roll)
+        physics_angle_deg = math.degrees(physics_angle_rad)
+
+        virtual_hardware_angle = physics_angle_deg + lp.angleOffsetDeg
+
+        tau = 0.05
+        blend = DT_CTRL / (tau + DT_CTRL)
+        self.virtual_zss_angle_smoothed = (self.virtual_zss_angle_smoothed * (1.0 - blend)) + (virtual_hardware_angle * blend)
+
+      CS.steeringAngleDeg = self.virtual_zss_angle_smoothed
+
+      steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
+      self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
 
     # Update Torque Params
     if self.CP.lateralTuning.which() == 'torque':
