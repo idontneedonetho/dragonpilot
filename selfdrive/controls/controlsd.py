@@ -91,21 +91,32 @@ class Controls:
     if self.CP.carFingerprint == TOYOTA_CAR.TOYOTA_PRIUS and self.calibrated_pose is not None:
       CS = CS.as_builder()
 
-      if CS.vEgo < 0.1 or not self.virtual_zss_initialized:
+      if not self.virtual_zss_initialized:
         self.virtual_zss_angle_smoothed = CS.steeringAngleDeg
         self.virtual_zss_initialized = True
+
+      yaw_rate = self.calibrated_pose.angular_velocity.yaw
+
+      speed_lower_bound = 1.0
+      speed_upper_bound = 3.0
+
+      physics_angle_rad = self.VM.get_steer_from_yaw_rate(-yaw_rate, max(CS.vEgo, speed_lower_bound), lp.roll)
+      physics_angle_deg = math.degrees(physics_angle_rad)
+      virtual_hardware_angle = physics_angle_deg + lp.angleOffsetDeg
+
+      if CS.vEgo < speed_lower_bound or CS.gearShifter == car.CarState.GearShifter.reverse:
+        anchor_angle = CS.steeringAngleDeg
+      elif CS.vEgo > speed_upper_bound:
+        anchor_angle = virtual_hardware_angle
       else:
-        yaw_rate = self.calibrated_pose.angular_velocity.yaw
-        physics_angle_rad = self.VM.get_steer_from_yaw_rate(-yaw_rate, CS.vEgo, lp.roll)
-        physics_angle_deg = math.degrees(physics_angle_rad)
+        interp_fraction = (CS.vEgo - speed_lower_bound) / (speed_upper_bound - speed_lower_bound)
+        anchor_angle = (virtual_hardware_angle * interp_fraction) + (CS.steeringAngleDeg * (1.0 - interp_fraction))
 
-        virtual_hardware_angle = physics_angle_deg + lp.angleOffsetDeg
+      self.virtual_zss_angle_smoothed += CS.steeringRateDeg * DT_CTRL
 
-        self.virtual_zss_angle_smoothed += CS.steeringRateDeg * DT_CTRL
-
-        tau = 0.5
-        blend = DT_CTRL / (tau + DT_CTRL)
-        self.virtual_zss_angle_smoothed = (self.virtual_zss_angle_smoothed * (1.0 - blend)) + (virtual_hardware_angle * blend)
+      tau = 2.0
+      blend = DT_CTRL / (tau + DT_CTRL)
+      self.virtual_zss_angle_smoothed = (self.virtual_zss_angle_smoothed * (1.0 - blend)) + (anchor_angle * blend)
 
       CS.steeringAngleDeg = self.virtual_zss_angle_smoothed
 
