@@ -96,12 +96,14 @@ class Controls:
         self.virtual_zss_initialized = True
       else:
         yaw_rate = self.calibrated_pose.angular_velocity.yaw
-        physics_angle_rad = self.VM.get_steer_from_yaw_rate(yaw_rate, CS.vEgo, lp.roll)
+        physics_angle_rad = self.VM.get_steer_from_yaw_rate(-yaw_rate, CS.vEgo, lp.roll)
         physics_angle_deg = math.degrees(physics_angle_rad)
 
         virtual_hardware_angle = physics_angle_deg + lp.angleOffsetDeg
 
-        tau = 0.05
+        self.virtual_zss_angle_smoothed += CS.steeringRateDeg * DT_CTRL
+
+        tau = 0.5
         blend = DT_CTRL / (tau + DT_CTRL)
         self.virtual_zss_angle_smoothed = (self.virtual_zss_angle_smoothed * (1.0 - blend)) + (virtual_hardware_angle * blend)
 
